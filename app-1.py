@@ -167,6 +167,55 @@ def prepare_image(uploaded_file):
     return display_image, array
 
 
+def prepare_dicom_slice_for_model(volume):
+    """
+    Convert a DICOM CT volume into one representative 2D CT image for
+    the existing 224x224 CNN.
+
+    The mask is NOT used for choosing the slice, so the prediction does
+    not depend on the ground-truth mask.
+    """
+    vol = np.asarray(volume, dtype=np.float32)
+
+    if vol.ndim != 3 or vol.shape[0] == 0:
+        raise ValueError("Invalid DICOM volume.")
+
+    # Pick a useful anatomical slice rather than blindly using slice 0.
+    # Prefer slices with a substantial non-air area, then choose the
+    # slice closest to the middle of that valid range.
+    body_scores = []
+    for i in range(vol.shape[0]):
+        slice_i = vol[i]
+        valid = np.count_nonzero(slice_i > -500)
+        body_scores.append(valid)
+
+    body_scores = np.asarray(body_scores)
+    threshold = max(1000, int(0.05 * vol.shape[1] * vol.shape[2]))
+    valid_indices = np.where(body_scores >= threshold)[0]
+
+    if len(valid_indices) == 0:
+        slice_index = vol.shape[0] // 2
+    else:
+        slice_index = int(valid_indices[len(valid_indices) // 2])
+
+    ct_slice = vol[slice_index]
+
+    # Robust CT windowing for display/model input.
+    # This avoids feeding raw HU values directly into a model trained
+    # on normalized images.
+    lower, upper = -100.0, 200.0
+    windowed = np.clip(ct_slice, lower, upper)
+    windowed = (windowed - lower) / (upper - lower + 1e-8)
+    image_u8 = (windowed * 255.0).astype(np.uint8)
+
+    display_image = Image.fromarray(image_u8).convert("RGB")
+    resized = display_image.resize((224, 224))
+    array = np.asarray(resized, dtype=np.float32) / 255.0
+    array = np.expand_dims(array, axis=0)
+
+    return display_image, array, slice_index
+
+
 def predict_image(model, image_array):
     raw = model.predict(image_array, verbose=0)
     probabilities = np.asarray(raw).reshape(-1)
@@ -540,7 +589,7 @@ if check_patient:
 
 
 # ============================================================
-# SECTION 2 — NEW PATIENT CT PREDICTION
+# SECTION 2 — NEW PATIENT CT / DICOM PREDICTION
 # ============================================================
 st.markdown(
     '<div class="section-title">2. New CT Scan Prediction</div>',
@@ -548,19 +597,19 @@ st.markdown(
 )
 
 st.info(
-    "For a new patient, upload a CT image. The model predicts "
-    "Bleeding, Ischemic, or Normal."
+    "Upload either a CT image (PNG/JPG) or a DICOM + mask ZIP. "
+    "If a DICOM ZIP is uploaded, the app automatically prepares a CT slice "
+    "for the CNN prediction and uses the same study for 3D visualization."
 )
 
 uploaded_image = st.file_uploader(
-    "Upload CT Scan Image",
+    "Upload CT Scan Image (optional when DICOM ZIP is provided)",
     type=["png", "jpg", "jpeg"],
     key="ct_image",
 )
 
-# Optional DICOM ZIP for 3D visualization.
 uploaded_dicom = st.file_uploader(
-    "Optional: Upload matching DICOM + mask ZIP for 3D visualization",
+    "Upload DICOM + matching mask ZIP (recommended for prediction + 3D)",
     type=["zip"],
     key="dicom_zip",
 )
@@ -586,8 +635,9 @@ if predict_button:
         st.warning("Please enter Address.")
         st.stop()
 
-    if uploaded_image is None:
-        st.warning("Please upload a CT image.")
+    # At least one input must be supplied.
+    if uploaded_image is None and uploaded_dicom is None:
+        st.warning("Please upload a CT image or a DICOM ZIP.")
         st.stop()
 
     # Prevent accidental overwriting of an existing patient report.
@@ -605,7 +655,44 @@ if predict_button:
         st.stop()
 
     try:
-        display_image, input_array = prepare_image(uploaded_image)
+        display_image = None
+        input_array = None
+        volume = None
+        mask_volume = None
+        dicom_error = None
+        dicom_slice_index = None
+
+        # --------------------------------------------------------
+        # INPUT PRIORITY:
+        # DICOM ZIP is used for both prediction and 3D when supplied.
+        # Otherwise PNG/JPG is used for prediction.
+        # --------------------------------------------------------
+        if uploaded_dicom is not None:
+            if pydicom is None:
+                st.error(
+                    "pydicom is not installed. Add pydicom to requirements.txt."
+                )
+                st.stop()
+
+            volume, mask_volume, dicom_error = load_uploaded_dicom_zip(
+                uploaded_dicom
+            )
+
+            if dicom_error:
+                st.error(dicom_error)
+                st.stop()
+
+            if volume is None:
+                st.error("DICOM visualization/prediction is not available.")
+                st.stop()
+
+            display_image, input_array, dicom_slice_index = (
+                prepare_dicom_slice_for_model(volume)
+            )
+
+        else:
+            display_image, input_array = prepare_image(uploaded_image)
+
         predicted_class, confidence, probabilities = predict_image(
             model, input_array
         )
@@ -634,7 +721,18 @@ if predict_button:
         left, right = st.columns(2)
 
         with left:
-            st.image(display_image, caption="Uploaded CT Scan", use_container_width=True)
+            if uploaded_dicom is not None:
+                st.image(
+                    display_image,
+                    caption=f"Representative CT Slice from DICOM (slice {dicom_slice_index + 1})",
+                    use_container_width=True,
+                )
+            else:
+                st.image(
+                    display_image,
+                    caption="Uploaded CT Scan",
+                    use_container_width=True,
+                )
 
         with right:
             st.subheader("Prediction Result")
@@ -675,47 +773,31 @@ if predict_button:
         if uploaded_dicom is None:
             st.info(
                 "3D affected-region visualization is Not available because "
-                "a matching DICOM + mask dataset was not provided for this CT."
+                "a DICOM + matching mask ZIP was not provided."
             )
-        elif pydicom is None:
-            st.error(
-                "pydicom is not installed. Add pydicom to requirements.txt."
+        elif mask_volume is None:
+            st.info(
+                "Matching mask was not found for this DICOM study. "
+                "Affected region: Not available."
             )
         else:
-            volume, mask_volume, error = load_uploaded_dicom_zip(uploaded_dicom)
+            affected_voxels = int(np.count_nonzero(mask_volume > 0))
 
-            if error:
-                st.warning(error)
-            elif volume is None:
-                st.info("3D visualization is Not available.")
+            if affected_voxels == 0:
+                st.info(
+                    "The matching mask contains no affected region. "
+                    "Affected region: Not available."
+                )
             else:
-                st.write(
-                    f"CT volume loaded successfully: {volume.shape}"
+                st.success(
+                    f"Matching mask found. Affected voxels: {affected_voxels:,}"
                 )
 
-                if mask_volume is None:
-                    st.info(
-                        "Matching mask was not found for this DICOM study. "
-                        "Affected region: Not available."
-                    )
-                else:
-                    affected_voxels = int(np.count_nonzero(mask_volume > 0))
-
-                    if affected_voxels == 0:
-                        st.info(
-                            "The matching mask contains no affected region. "
-                            "Affected region: Not available."
-                        )
-                    else:
-                        st.success(
-                            f"Matching mask found. Affected voxels: {affected_voxels:,}"
-                        )
-
-                        fig = make_3d_figure(volume, mask_volume)
-                        st.plotly_chart(
-                            fig,
-                            use_container_width=True,
-                        )
+                fig = make_3d_figure(volume, mask_volume)
+                st.plotly_chart(
+                    fig,
+                    use_container_width=True,
+                )
 
     except Exception as e:
         st.error(f"Prediction failed: {e}")
