@@ -336,165 +336,249 @@ def create_pdf(record: dict) -> bytes:
 # ============================================================
 # DICOM + MASK HELPERS
 # ============================================================
+def _read_npz_array(raw_bytes):
+    """Read a numpy/npz mask from ZIP bytes."""
+    loaded = np.load(io.BytesIO(raw_bytes), allow_pickle=False)
+    if isinstance(loaded, np.lib.npyio.NpzFile):
+        keys = list(loaded.keys())
+        if not keys:
+            return None
+        arr = loaded[keys[0]]
+        loaded.close()
+        return np.asarray(arr)
+    return np.asarray(loaded)
+
+
 def load_uploaded_dicom_zip(uploaded_zip):
     """
-    Reads a ZIP containing DICOM files and optional mask files.
+    Load a DICOM study ZIP and pair each raw.dcm slice with the mask.npz
+    located beside that same slice.
 
-    Supported arrangement:
-      - .dcm files
-      - mask.npy / mask.npz files
-      - image.npy / image.npz files
-
-    If a mask is not supplied with the selected study, the 3D affected
-    region is reported as unavailable rather than reusing another patient.
+    Supported layouts:
+      1) study/00041/raw.dcm + study/00041/mask.npz
+      2) folder/raw_001.dcm + folder/mask.npz (single volume mask)
+      3) flat DICOM files + one mask.npy/mask.npz volume
     """
     if uploaded_zip is None:
         return None, None, None
 
     try:
+        if pydicom is None:
+            return None, None, "pydicom is not installed."
+
         data = uploaded_zip.getvalue()
         zf = zipfile.ZipFile(io.BytesIO(data))
+        names = [n for n in zf.namelist() if not n.endswith("/")]
 
-        dcm_names = [
-            n for n in zf.namelist()
-            if n.lower().endswith(".dcm") and not n.endswith("/")
-        ]
+        # Prefer actual raw.dcm files. If not present, accept any .dcm.
+        dcm_names = [n for n in names if n.lower().endswith("/raw.dcm")]
+        if not dcm_names:
+            dcm_names = [n for n in names if n.lower().endswith(".dcm")]
 
         if not dcm_names:
             return None, None, "No DICOM files were found in the ZIP."
 
+        def slice_sort_key(name):
+            parts = Path(name).parts
+            # Dataset slices are usually .../00041/raw.dcm
+            for part in reversed(parts[:-1]):
+                if part.isdigit():
+                    return (0, int(part), name)
+            try:
+                ds = pydicom.dcmread(
+                    io.BytesIO(zf.read(name)),
+                    stop_before_pixels=True,
+                    force=True,
+                )
+                inst = int(getattr(ds, "InstanceNumber", 0))
+            except Exception:
+                inst = 0
+            return (1, inst, name)
+
+        dcm_names = sorted(dcm_names, key=slice_sort_key)
+
         slices = []
+        paired_masks = []
+        mask_found_for_slice = 0
+
         for name in dcm_names:
             try:
                 ds = pydicom.dcmread(io.BytesIO(zf.read(name)), force=True)
                 arr = ds.pixel_array.astype(np.float32)
 
-                # Basic sorting using InstanceNumber when available.
-                instance = getattr(ds, "InstanceNumber", 0)
-                slices.append((int(instance), name, arr))
+                # Convert stored pixel values to HU when metadata is available.
+                slope = float(getattr(ds, "RescaleSlope", 1.0))
+                intercept = float(getattr(ds, "RescaleIntercept", 0.0))
+                arr = arr * slope + intercept
+
+                slices.append(arr)
+
+                # Match mask from the SAME slice directory.
+                parent = str(Path(name).parent)
+                sibling_candidates = [
+                    f"{parent}/mask.npz",
+                    f"{parent}/mask.npy",
+                ]
+                mask_arr = None
+                for candidate in sibling_candidates:
+                    if candidate in names:
+                        mask_arr = _read_npz_array(zf.read(candidate))
+                        break
+
+                paired_masks.append(mask_arr)
+                if mask_arr is not None:
+                    mask_found_for_slice += 1
+
             except Exception:
                 continue
 
         if not slices:
             return None, None, "DICOM files could not be read."
 
-        slices.sort(key=lambda x: (x[0], x[1]))
-        volume = np.stack([x[2] for x in slices], axis=0)
+        volume = np.stack(slices, axis=0).astype(np.float32)
 
-        mask_volume = None
+        # Case A: one mask beside every DICOM slice.
+        if mask_found_for_slice == len(slices) and all(
+            m is not None for m in paired_masks
+        ):
+            try:
+                mask_volume = np.stack(
+                    [np.asarray(m).squeeze() for m in paired_masks],
+                    axis=0,
+                )
+                if mask_volume.shape != volume.shape:
+                    mask_volume = None
+            except Exception:
+                mask_volume = None
+        else:
+            mask_volume = None
 
-        mask_candidates = [
-            n for n in zf.namelist()
-            if (
-                n.lower().endswith(".npy")
-                or n.lower().endswith(".npz")
-            )
-            and "mask" in n.lower()
-        ]
+        # Case B: a single whole-volume mask exists somewhere in the ZIP.
+        if mask_volume is None:
+            volume_mask_candidates = [
+                n for n in names
+                if (
+                    ("mask" in n.lower())
+                    and (
+                        n.lower().endswith(".npz")
+                        or n.lower().endswith(".npy")
+                    )
+                )
+                and not n.lower().endswith("/mask.npz")
+                and not n.lower().endswith("/mask.npy")
+            ]
 
-        if mask_candidates:
-            mask_name = mask_candidates[0]
-            raw = zf.read(mask_name)
-            loaded = np.load(io.BytesIO(raw), allow_pickle=False)
+            for mask_name in volume_mask_candidates:
+                try:
+                    candidate = _read_npz_array(zf.read(mask_name)).squeeze()
+                    if candidate.shape == volume.shape:
+                        mask_volume = candidate
+                        break
+                except Exception:
+                    continue
 
-            if isinstance(loaded, np.lib.npyio.NpzFile):
-                keys = list(loaded.keys())
-                if keys:
-                    mask_volume = loaded[keys[0]]
-            else:
-                mask_volume = loaded
-
+        if mask_volume is not None:
             mask_volume = np.asarray(mask_volume)
-
-            if mask_volume.ndim == 2:
-                mask_volume = np.expand_dims(mask_volume, axis=0)
-
-            if mask_volume.shape != volume.shape:
+            if mask_volume.ndim != 3 or mask_volume.shape != volume.shape:
                 mask_volume = None
 
-        return volume, mask_volume, None
+        if mask_found_for_slice == len(slices) and mask_volume is not None:
+            mask_status = f"Matched {mask_found_for_slice}/{len(slices)} DICOM slice masks."
+        elif mask_volume is not None:
+            mask_status = "A matching whole-volume mask was found."
+        elif mask_found_for_slice == 0:
+            mask_status = "No matching mask was found in this DICOM ZIP."
+        else:
+            mask_status = (
+                f"Only {mask_found_for_slice}/{len(slices)} slice masks were found; "
+                "affected-region display is marked unavailable."
+            )
+
+        return volume, mask_volume, None, mask_status
 
     except Exception as e:
-        return None, None, f"Unable to process DICOM ZIP: {e}"
+        return None, None, f"Unable to process DICOM ZIP: {e}", None
 
 
 def make_3d_figure(volume, mask=None):
-    # Downsample for browser performance.
-    max_dim = 96
-    step_z = max(1, int(np.ceil(volume.shape[0] / max_dim)))
-    step_y = max(1, int(np.ceil(volume.shape[1] / max_dim)))
-    step_x = max(1, int(np.ceil(volume.shape[2] / max_dim)))
+    """
+    Browser-friendly 3D CT surface using Plotly isosurfaces.
+    The CT is rendered as a soft-tissue surface instead of a raw point cloud.
+    A matching mask is rendered as a separate affected-region surface.
+    """
+    vol = np.asarray(volume, dtype=np.float32)
 
-    vol = volume[::step_z, ::step_y, ::step_x]
+    # Downsample while keeping the volume shape proportional.
+    target = 64
+    step_z = max(1, int(np.ceil(vol.shape[0] / target)))
+    step_y = max(1, int(np.ceil(vol.shape[1] / target)))
+    step_x = max(1, int(np.ceil(vol.shape[2] / target)))
 
-    # Normalize CT values for visualization.
-    vmin = np.percentile(vol, 2)
-    vmax = np.percentile(vol, 98)
-    normalized = np.clip((vol - vmin) / (vmax - vmin + 1e-8), 0, 1)
+    vol = vol[::step_z, ::step_y, ::step_x]
 
-    z, y, x = np.where(normalized > 0.35)
+    # Soft-tissue CT window.
+    lower, upper = -20.0, 120.0
+    normalized = np.clip((vol - lower) / (upper - lower), 0, 1)
 
-    # Keep point count manageable.
-    if len(x) > 18000:
-        idx = np.linspace(0, len(x) - 1, 18000).astype(int)
-        x, y, z = x[idx], y[idx], z[idx]
-        values = normalized[z, y, x]
-    else:
-        values = normalized[z, y, x]
+    z, y, x = np.indices(normalized.shape)
 
     fig = go.Figure()
 
+    # Isosurface threshold suppresses most air and gives a continuous
+    # anatomical surface rather than a cylinder-like marker cloud.
     fig.add_trace(
-        go.Scatter3d(
-            x=x,
-            y=y,
-            z=z,
-            mode="markers",
-            marker=dict(
-                size=2,
-                opacity=0.18,
-                color=values,
-                colorscale="Gray",
-                showscale=False,
-            ),
-            name="CT Volume",
+        go.Isosurface(
+            x=x.flatten(),
+            y=y.flatten(),
+            z=z.flatten(),
+            value=normalized.flatten(),
+            isomin=0.30,
+            isomax=0.95,
+            surface_count=2,
+            opacity=0.28,
+            colorscale="Gray",
+            showscale=False,
+            caps=dict(x_show=False, y_show=False, z_show=False),
+            name="CT Brain Surface",
         )
     )
 
     if mask is not None and mask.shape == volume.shape:
-        m = mask[::step_z, ::step_y, ::step_x]
-        mz, my, mx = np.where(m > 0)
+        m = np.asarray(mask)[::step_z, ::step_y, ::step_x]
+        mz, my, mx = np.indices(m.shape)
 
-        if len(mx) > 25000:
-            idx = np.linspace(0, len(mx) - 1, 25000).astype(int)
-            mx, my, mz = mx[idx], my[idx], mz[idx]
+        affected = (m > 0).astype(np.float32)
 
-        if len(mx) > 0:
+        if np.any(affected > 0):
             fig.add_trace(
-                go.Scatter3d(
-                    x=mx,
-                    y=my,
-                    z=mz,
-                    mode="markers",
-                    marker=dict(
-                        size=3,
-                        opacity=0.65,
-                        color="red",
-                    ),
+                go.Isosurface(
+                    x=mx.flatten(),
+                    y=my.flatten(),
+                    z=mz.flatten(),
+                    value=affected.flatten(),
+                    isomin=0.5,
+                    isomax=1.0,
+                    surface_count=1,
+                    opacity=0.80,
+                    colorscale=[[0, "red"], [1, "red"]],
+                    showscale=False,
+                    caps=dict(x_show=False, y_show=False, z_show=False),
                     name="Affected Region",
                 )
             )
 
     fig.update_layout(
-        title="3D CT Visualization",
+        title="3D CT Brain Visualization",
         scene=dict(
             xaxis_title="X",
             yaxis_title="Y",
             zaxis_title="Z",
             aspectmode="data",
+            bgcolor="white",
         ),
         height=650,
         margin=dict(l=0, r=0, t=50, b=0),
+        legend=dict(orientation="h"),
     )
 
     return fig
@@ -597,9 +681,9 @@ st.markdown(
 )
 
 st.info(
-    "Upload either a CT image (PNG/JPG) or a DICOM + mask ZIP. "
-    "If a DICOM ZIP is uploaded, the app automatically prepares a CT slice "
-    "for the CNN prediction and uses the same study for 3D visualization."
+    "Upload either a CT image (PNG/JPG) or a DICOM study ZIP. "
+    "For the dataset format, each slice can contain raw.dcm + matching "
+    "mask.npz; the app pairs masks with their own DICOM slices."
 )
 
 uploaded_image = st.file_uploader(
@@ -660,6 +744,7 @@ if predict_button:
         volume = None
         mask_volume = None
         dicom_error = None
+        dicom_status = None
         dicom_slice_index = None
 
         # --------------------------------------------------------
@@ -674,7 +759,7 @@ if predict_button:
                 )
                 st.stop()
 
-            volume, mask_volume, dicom_error = load_uploaded_dicom_zip(
+            volume, mask_volume, dicom_error, dicom_status = load_uploaded_dicom_zip(
                 uploaded_dicom
             )
 
@@ -685,6 +770,9 @@ if predict_button:
             if volume is None:
                 st.error("DICOM visualization/prediction is not available.")
                 st.stop()
+
+            if dicom_status:
+                st.caption(f"DICOM study status: {dicom_status}")
 
             display_image, input_array, dicom_slice_index = (
                 prepare_dicom_slice_for_model(volume)
@@ -714,9 +802,22 @@ if predict_button:
             "probabilities": probabilities,
         }
 
-        save_patient_record(record)
+        try:
+            save_patient_record(record)
+            record_saved = True
+        except Exception as save_error:
+            # Streamlit Cloud storage can be ephemeral/read-only. Do not let
+            # a record-write failure block the prediction or PDF report.
+            record_saved = False
+            st.warning(
+                "Prediction completed, but the patient record could not be "
+                f"saved permanently in this deployment: {save_error}"
+            )
 
-        st.success("Prediction completed and patient report saved.")
+        if record_saved:
+            st.success("Prediction completed and patient report saved.")
+        else:
+            st.success("Prediction completed.")
 
         left, right = st.columns(2)
 
@@ -776,10 +877,15 @@ if predict_button:
                 "a DICOM + matching mask ZIP was not provided."
             )
         elif mask_volume is None:
-            st.info(
-                "Matching mask was not found for this DICOM study. "
-                "Affected region: Not available."
-            )
+            if dicom_status:
+                st.info(
+                    f"{dicom_status} Affected region: Not available."
+                )
+            else:
+                st.info(
+                    "Matching mask was not found for this DICOM study. "
+                    "Affected region: Not available."
+                )
         else:
             affected_voxels = int(np.count_nonzero(mask_volume > 0))
 
