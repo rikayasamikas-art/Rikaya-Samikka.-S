@@ -13,6 +13,7 @@ from PIL import Image
 import tensorflow as tf
 import pydicom
 import plotly.graph_objects as go
+
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 
@@ -21,42 +22,19 @@ from reportlab.pdfgen import canvas
 # PATHS
 # ============================================================
 
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
-
-PROJECT_DIR = APP_DIR
+APP_DIR = os.path.dirname(
+    os.path.abspath(__file__)
+)
 
 MODEL_PATH = os.path.join(
-    PROJECT_DIR,
+    APP_DIR,
     "brain_stroke_model.keras"
 )
 
 PATIENT_RECORDS_DIR = os.path.join(
-    PROJECT_DIR,
+    APP_DIR,
     "patient_records"
 )
-
-# Optional Colab fallback
-DRIVE_PROJECT_DIR = "/content/drive/MyDrive/BrainStroke_Project"
-
-if not os.path.exists(MODEL_PATH):
-
-    fallback_model = os.path.join(
-        DRIVE_PROJECT_DIR,
-        "brain_stroke_model.keras"
-    )
-
-    if os.path.exists(fallback_model):
-        MODEL_PATH = fallback_model
-
-if not os.path.exists(PATIENT_RECORDS_DIR):
-
-    fallback_records = os.path.join(
-        DRIVE_PROJECT_DIR,
-        "patient_records"
-    )
-
-    if os.path.exists(fallback_records):
-        PATIENT_RECORDS_DIR = fallback_records
 
 
 # ============================================================
@@ -66,7 +44,7 @@ if not os.path.exists(PATIENT_RECORDS_DIR):
 CLASS_NAMES = {
     0: "Bleeding",
     1: "Ischemic",
-    2: "Normal"
+    2: "Normal",
 }
 
 
@@ -77,7 +55,7 @@ CLASS_NAMES = {
 st.set_page_config(
     page_title="AI Brain Stroke Detection",
     page_icon="🧠",
-    layout="wide"
+    layout="wide",
 )
 
 st.title(
@@ -93,20 +71,23 @@ st.caption(
 # SESSION STATE
 # ============================================================
 
-default_state = {
-    "patient_ready": False,
-    "patient_mode": None,
-    "patient_data": None,
-    "ct_prediction": None,
-    "dicom_prediction": None,
-    "dicom_result": None,
-}
+if "patient_ready" not in st.session_state:
+    st.session_state.patient_ready = False
 
-for key, value in default_state.items():
+if "patient_mode" not in st.session_state:
+    st.session_state.patient_mode = None
 
-    if key not in st.session_state:
+if "patient_data" not in st.session_state:
+    st.session_state.patient_data = None
 
-        st.session_state[key] = value
+if "ct_prediction" not in st.session_state:
+    st.session_state.ct_prediction = None
+
+if "dicom_prediction" not in st.session_state:
+    st.session_state.dicom_prediction = None
+
+if "dicom_result" not in st.session_state:
+    st.session_state.dicom_result = None
 
 
 # ============================================================
@@ -119,7 +100,8 @@ def load_model():
     if not os.path.exists(MODEL_PATH):
 
         raise FileNotFoundError(
-            f"Model file not found: {MODEL_PATH}"
+            "brain_stroke_model.keras not found. "
+            "Please keep the model file in the same GitHub repository."
         )
 
     return tf.keras.models.load_model(
@@ -138,7 +120,9 @@ def predict_image(image):
     arr = np.array(
         image,
         dtype=np.float32
-    ) / 255.0
+    )
+
+    arr = arr / 255.0
 
     arr = np.expand_dims(
         arr,
@@ -152,25 +136,29 @@ def predict_image(image):
         verbose=0
     )[0]
 
-    index = int(
+    predicted_index = int(
         np.argmax(probabilities)
     )
 
-    result = CLASS_NAMES[index]
+    predicted_class = CLASS_NAMES[
+        predicted_index
+    ]
 
     confidence = float(
-        probabilities[index] * 100
+        probabilities[
+            predicted_index
+        ] * 100
     )
 
     return (
-        result,
+        predicted_class,
         confidence,
         probabilities
     )
 
 
 # ============================================================
-# PATIENT RECORD FUNCTIONS
+# PATIENT RECORD
 # ============================================================
 
 def save_patient(
@@ -183,20 +171,20 @@ def save_patient(
         exist_ok=True
     )
 
-    path = os.path.join(
+    file_path = os.path.join(
         PATIENT_RECORDS_DIR,
         f"{patient_id}.json"
     )
 
     with open(
-        path,
+        file_path,
         "w",
         encoding="utf-8"
-    ) as f:
+    ) as file:
 
         json.dump(
             data,
-            f,
+            file,
             indent=4
         )
 
@@ -205,22 +193,24 @@ def load_patient(
     patient_id
 ):
 
-    path = os.path.join(
+    file_path = os.path.join(
         PATIENT_RECORDS_DIR,
         f"{patient_id}.json"
     )
 
-    if os.path.exists(path):
+    if not os.path.exists(
+        file_path
+    ):
 
-        with open(
-            path,
-            "r",
-            encoding="utf-8"
-        ) as f:
+        return None
 
-            return json.load(f)
+    with open(
+        file_path,
+        "r",
+        encoding="utf-8"
+    ) as file:
 
-    return None
+        return json.load(file)
 
 
 # ============================================================
@@ -231,7 +221,7 @@ st.header(
     "1. Patient Information"
 )
 
-patient_mode = st.radio(
+patient_type = st.radio(
     "Patient Type",
     [
         "New Patient",
@@ -245,52 +235,58 @@ patient_mode = st.radio(
 # NEW PATIENT
 # ============================================================
 
-if patient_mode == "New Patient":
+if patient_type == "New Patient":
 
     col1, col2 = st.columns(2)
 
     with col1:
 
-        patient_name = st.text_input(
-            "Patient Name"
+        new_name = st.text_input(
+            "Patient Name",
+            key="new_name"
         )
 
-        patient_id = st.text_input(
-            "Patient ID"
+        new_id = st.text_input(
+            "Patient ID",
+            key="new_id"
         )
 
-        gender = st.selectbox(
+        new_gender = st.selectbox(
             "Gender",
             [
                 "Male",
                 "Female",
                 "Other"
-            ]
+            ],
+            key="new_gender"
         )
 
     with col2:
 
-        address = st.text_area(
-            "Address"
+        new_address = st.text_area(
+            "Address",
+            key="new_address"
         )
 
-        scan_date = st.date_input(
+        new_scan_date = st.date_input(
             "Scan Date",
-            value=date.today()
+            value=date.today(),
+            key="new_scan_date"
         )
 
     if st.button(
         "Save New Patient",
-        type="primary"
+        type="primary",
+        key="save_new_patient"
     ):
 
-        if not patient_name.strip():
+        if not new_name.strip():
 
             st.warning(
                 "Please enter Patient Name."
             )
 
-        elif not patient_id.strip():
+        elif not new_id.strip():
 
             st.warning(
                 "Please enter Patient ID."
@@ -298,19 +294,19 @@ if patient_mode == "New Patient":
 
         else:
 
-            clean_id = (
-                patient_id.strip()
+            patient_id_clean = (
+                new_id.strip()
             )
 
             existing_record = load_patient(
-                clean_id
+                patient_id_clean
             )
 
             if existing_record:
 
                 st.warning(
                     "This Patient ID already exists. "
-                    "Please select Existing Patient."
+                    "Please use Existing Patient."
                 )
 
             else:
@@ -318,23 +314,25 @@ if patient_mode == "New Patient":
                 patient_data = {
 
                     "name":
-                        patient_name.strip(),
+                        new_name.strip(),
 
                     "id":
-                        clean_id,
+                        patient_id_clean,
 
                     "gender":
-                        gender,
+                        new_gender,
 
                     "address":
-                        address.strip(),
+                        new_address.strip(),
 
                     "scan_date":
-                        str(scan_date)
+                        str(
+                            new_scan_date
+                        )
                 }
 
                 save_patient(
-                    clean_id,
+                    patient_id_clean,
                     patient_data
                 )
 
@@ -365,16 +363,18 @@ if patient_mode == "New Patient":
 
 else:
 
-    old_patient_id = st.text_input(
-        "Enter Existing Patient ID"
+    existing_id = st.text_input(
+        "Enter Existing Patient ID",
+        key="existing_id"
     )
 
     if st.button(
         "Load Patient Information",
-        type="primary"
+        type="primary",
+        key="load_patient"
     ):
 
-        if not old_patient_id.strip():
+        if not existing_id.strip():
 
             st.warning(
                 "Please enter Patient ID."
@@ -382,11 +382,11 @@ else:
 
         else:
 
-            old_record = load_patient(
-                old_patient_id.strip()
+            record = load_patient(
+                existing_id.strip()
             )
 
-            if old_record:
+            if record:
 
                 st.session_state.patient_ready = True
 
@@ -395,7 +395,7 @@ else:
                 )
 
                 st.session_state.patient_data = (
-                    old_record
+                    record
                 )
 
                 st.session_state.ct_prediction = None
@@ -420,7 +420,7 @@ else:
 
 
 # ============================================================
-# SHOW PATIENT INFORMATION
+# CURRENT PATIENT DISPLAY
 # ============================================================
 
 if (
@@ -436,9 +436,9 @@ if (
         "Patient Information"
     )
 
-    c1, c2 = st.columns(2)
+    col1, col2 = st.columns(2)
 
-    with c1:
+    with col1:
 
         st.write(
             "**Patient Name:** "
@@ -470,7 +470,7 @@ if (
             )
         )
 
-    with c2:
+    with col2:
 
         st.write(
             "**Address:** "
@@ -492,6 +492,7 @@ if (
             )
         )
 
+    # Existing patient previous report
     if (
         st.session_state.patient_mode
         == "Existing Patient"
@@ -514,7 +515,7 @@ if (
 
 
 # ============================================================
-# STOP BEFORE PATIENT
+# STOP UNTIL PATIENT IS READY
 # ============================================================
 
 if not st.session_state.patient_ready:
@@ -527,7 +528,7 @@ if not st.session_state.patient_ready:
 
 
 # ============================================================
-# 2. CT SCAN PREDICTION
+# 2. CT PREDICTION
 # ============================================================
 
 st.header(
@@ -535,24 +536,24 @@ st.header(
 )
 
 st.caption(
-    "Upload CT image for 2D AI prediction."
+    "Upload PNG/JPG CT image for 2D stroke prediction."
 )
 
-uploaded_image = st.file_uploader(
+uploaded_ct = st.file_uploader(
     "Upload CT Image",
     type=[
         "png",
         "jpg",
         "jpeg"
     ],
-    key="ct_upload"
+    key="uploaded_ct"
 )
 
 
-if uploaded_image:
+if uploaded_ct:
 
     ct_image = Image.open(
-        uploaded_image
+        uploaded_ct
     )
 
     st.image(
@@ -563,13 +564,14 @@ if uploaded_image:
 
     if st.button(
         "Predict Stroke from CT",
-        type="primary"
+        type="primary",
+        key="ct_predict_button"
     ):
 
         try:
 
             (
-                result,
+                predicted_class,
                 confidence,
                 probabilities
             ) = predict_image(
@@ -579,7 +581,7 @@ if uploaded_image:
             st.session_state.ct_prediction = {
 
                 "class":
-                    result,
+                    predicted_class,
 
                 "confidence":
                     confidence,
@@ -588,14 +590,11 @@ if uploaded_image:
                     probabilities
             }
 
-            st.success(
-                f"CT Prediction: {result}"
-            )
-
-        except Exception as e:
+        except Exception as error:
 
             st.error(
-                f"CT Prediction Error: {e}"
+                "CT Prediction Error: "
+                + str(error)
             )
 
 
@@ -605,7 +604,7 @@ if uploaded_image:
 
 if st.session_state.ct_prediction:
 
-    pred = (
+    prediction = (
         st.session_state.ct_prediction
     )
 
@@ -613,25 +612,25 @@ if st.session_state.ct_prediction:
         "CT Prediction Result"
     )
 
-    c1, c2 = st.columns(2)
+    col1, col2 = st.columns(2)
 
-    with c1:
+    with col1:
 
         st.success(
             "Stroke Type: "
             + str(
-                pred["class"]
+                prediction["class"]
             )
         )
 
-    with c2:
+    with col2:
 
         st.metric(
             "Confidence",
-            f"{pred['confidence']:.2f}%"
+            f"{prediction['confidence']:.2f}%"
         )
 
-    probability_df = pd.DataFrame(
+    ct_probabilities = pd.DataFrame(
         {
             "Class": [
                 "Bleeding",
@@ -642,19 +641,19 @@ if st.session_state.ct_prediction:
             "Probability (%)": [
 
                 float(
-                    pred[
+                    prediction[
                         "probabilities"
                     ][0] * 100
                 ),
 
                 float(
-                    pred[
+                    prediction[
                         "probabilities"
                     ][1] * 100
                 ),
 
                 float(
-                    pred[
+                    prediction[
                         "probabilities"
                     ][2] * 100
                 )
@@ -663,13 +662,13 @@ if st.session_state.ct_prediction:
     )
 
     st.dataframe(
-        probability_df,
+        ct_probabilities,
         hide_index=True,
         use_container_width=True
     )
 
     st.bar_chart(
-        probability_df.set_index(
+        ct_probabilities.set_index(
             "Class"
         )
     )
@@ -679,23 +678,23 @@ if st.session_state.ct_prediction:
 # DICOM READING
 # ============================================================
 
-def read_dicom_file(
-    path
+def read_dicom(
+    dcm_path
 ):
 
-    dcm = pydicom.dcmread(
-        path
+    dicom = pydicom.dcmread(
+        dcm_path
     )
 
     pixels = (
-        dcm.pixel_array.astype(
+        dicom.pixel_array.astype(
             np.float32
         )
     )
 
     slope = float(
         getattr(
-            dcm,
+            dicom,
             "RescaleSlope",
             1
         )
@@ -703,7 +702,7 @@ def read_dicom_file(
 
     intercept = float(
         getattr(
-            dcm,
+            dicom,
             "RescaleIntercept",
             0
         )
@@ -715,64 +714,66 @@ def read_dicom_file(
     )
 
     return (
-        dcm,
+        dicom,
         pixels
     )
 
 
 # ============================================================
-# DICOM TO MODEL IMAGE
+# DICOM TO MODEL FORMAT
 # ============================================================
 
-def dicom_to_model_array(
+def dicom_to_model_image(
     pixels,
-    dcm=None
+    dicom
 ):
 
     center = 40.0
     width = 80.0
 
-    if dcm is not None:
+    try:
 
-        try:
+        window_center = getattr(
+            dicom,
+            "WindowCenter",
+            40
+        )
 
-            wc = getattr(
-                dcm,
-                "WindowCenter",
-                center
-            )
+        window_width = getattr(
+            dicom,
+            "WindowWidth",
+            80
+        )
 
-            ww = getattr(
-                dcm,
-                "WindowWidth",
-                width
-            )
+        if isinstance(
+            window_center,
+            pydicom.multival.MultiValue
+        ):
 
-            if isinstance(
-                wc,
-                pydicom.multival.MultiValue
-            ):
+            window_center = window_center[0]
 
-                wc = wc[0]
+        if isinstance(
+            window_width,
+            pydicom.multival.MultiValue
+        ):
 
-            if isinstance(
-                ww,
-                pydicom.multival.MultiValue
-            ):
+            window_width = window_width[0]
 
-                ww = ww[0]
+        center = float(
+            window_center
+        )
 
-            center = float(wc)
+        width = float(
+            window_width
+        )
 
-            width = float(ww)
+        if width <= 1:
 
-            if width <= 1:
+            width = 80.0
 
-                width = 80.0
+    except Exception:
 
-        except Exception:
-
-            pass
+        pass
 
     low = (
         center
@@ -791,10 +792,12 @@ def dicom_to_model_array(
     )
 
     image8 = (
+
         (
             clipped - low
         )
-        / (
+        /
+        (
             high - low
         )
         * 255.0
@@ -812,105 +815,108 @@ def dicom_to_model_array(
         (224, 224)
     )
 
-    return (
-        np.array(
-            image,
-            dtype=np.float32
-        )
-        / 255.0
+    array = np.array(
+        image,
+        dtype=np.float32
     )
+
+    array = array / 255.0
+
+    return array
 
 
 # ============================================================
 # DICOM PREDICTION
 # ============================================================
 
-def predict_dicom(
+def predict_dicom_study(
     images,
-    dcms,
-    maximum_slices=40
+    dicoms,
+    max_slices=40
 ):
 
-    if not images:
+    total_slices = len(
+        images
+    )
+
+    if total_slices == 0:
 
         raise ValueError(
             "No DICOM slices found."
         )
 
-    total = len(images)
+    if total_slices > max_slices:
 
-    if total > maximum_slices:
-
-        indices = np.linspace(
+        selected_indices = np.linspace(
             0,
-            total - 1,
-            maximum_slices,
+            total_slices - 1,
+            max_slices,
             dtype=int
         )
 
     else:
 
-        indices = np.arange(
-            total
+        selected_indices = np.arange(
+            total_slices
         )
 
-    batch_images = []
+    batch = []
 
-    for i in indices:
+    for index in selected_indices:
 
-        batch_images.append(
-            dicom_to_model_array(
-                images[i],
-                dcms[i]
+        model_image = (
+            dicom_to_model_image(
+                images[index],
+                dicoms[index]
             )
         )
 
+        batch.append(
+            model_image
+        )
+
     batch = np.stack(
-        batch_images
+        batch
     )
 
     model = load_model()
 
-    slice_probabilities = (
-        model.predict(
-            batch,
-            verbose=0
-        )
+    slice_predictions = model.predict(
+        batch,
+        verbose=0
     )
 
-    study_probabilities = (
-        np.mean(
-            slice_probabilities,
-            axis=0
-        )
+    study_probabilities = np.mean(
+        slice_predictions,
+        axis=0
     )
 
-    index = int(
+    predicted_index = int(
         np.argmax(
             study_probabilities
         )
     )
 
-    result = CLASS_NAMES[
-        index
+    predicted_class = CLASS_NAMES[
+        predicted_index
     ]
 
     confidence = float(
         study_probabilities[
-            index
+            predicted_index
         ] * 100
     )
 
     return (
-        result,
+        predicted_class,
         confidence,
         study_probabilities,
-        len(indices)
+        len(selected_indices)
     )
 
 
 # ============================================================
-# ZIP LOADER
+# DICOM ZIP LOADER
 # ============================================================
 
 def load_dicom_zip(
@@ -928,21 +934,21 @@ def load_dicom_zip(
             "r"
         ) as archive:
 
-            base = os.path.abspath(
+            base_path = os.path.abspath(
                 temp_dir
             )
 
-            for member in archive.infolist():
+            for item in archive.infolist():
 
-                target = os.path.abspath(
+                destination = os.path.abspath(
                     os.path.join(
                         temp_dir,
-                        member.filename
+                        item.filename
                     )
                 )
 
-                if not target.startswith(
-                    base + os.sep
+                if not destination.startswith(
+                    base_path + os.sep
                 ):
 
                     raise ValueError(
@@ -954,10 +960,9 @@ def load_dicom_zip(
             )
 
         dicom_paths = []
-
         mask_paths = {}
 
-        for root, _, files in os.walk(
+        for root, directories, files in os.walk(
             temp_dir
         ):
 
@@ -968,9 +973,11 @@ def load_dicom_zip(
                     filename
                 )
 
-                lower = filename.lower()
+                lower_name = (
+                    filename.lower()
+                )
 
-                if lower.endswith(
+                if lower_name.endswith(
                     ".dcm"
                 ):
 
@@ -978,9 +985,9 @@ def load_dicom_zip(
                         full_path
                     )
 
-                elif lower == "mask.npz":
+                elif lower_name == "mask.npz":
 
-                    key = os.path.relpath(
+                    relative_folder = os.path.relpath(
                         root,
                         temp_dir
                     ).replace(
@@ -989,10 +996,10 @@ def load_dicom_zip(
                     )
 
                     mask_paths[
-                        key
+                        relative_folder
                     ] = full_path
 
-        def sort_key(
+        def sort_dicom(
             path
         ):
 
@@ -1015,21 +1022,20 @@ def load_dicom_zip(
                 path
             )
 
-        dicom_paths = sorted(
-            dicom_paths,
-            key=sort_key
+        dicom_paths.sort(
+            key=sort_dicom
         )
 
         images = []
-        dcms = []
+        dicoms = []
         masks = []
 
         for dcm_path in dicom_paths:
 
             try:
 
-                dcm, pixels = (
-                    read_dicom_file(
+                dicom, pixels = (
+                    read_dicom(
                         dcm_path
                     )
                 )
@@ -1038,32 +1044,38 @@ def load_dicom_zip(
                     pixels
                 )
 
-                dcms.append(
-                    dcm
+                dicoms.append(
+                    dicom
                 )
 
-                key = os.path.relpath(
-                    os.path.dirname(
-                        dcm_path
-                    ),
-                    temp_dir
-                ).replace(
-                    "\\",
-                    "/"
+                relative_folder = (
+                    os.path.relpath(
+                        os.path.dirname(
+                            dcm_path
+                        ),
+                        temp_dir
+                    ).replace(
+                        "\\",
+                        "/"
+                    )
                 )
 
                 mask_path = (
                     mask_paths.get(
-                        key
+                        relative_folder
                     )
                 )
 
                 if mask_path:
 
-                    mask = np.load(
+                    mask_data = np.load(
                         mask_path,
                         allow_pickle=False
-                    )["mask"]
+                    )
+
+                    mask = mask_data[
+                        "mask"
+                    ]
 
                     if mask.shape == pixels.shape:
 
@@ -1087,16 +1099,16 @@ def load_dicom_zip(
 
                 continue
 
-        mask_count = sum(
-            m is not None
-            for m in masks
+        matching_masks = sum(
+            mask is not None
+            for mask in masks
         )
 
         return (
             images,
+            dicoms,
             masks,
-            dcms,
-            mask_count,
+            matching_masks,
             temp_dir
         )
 
@@ -1111,7 +1123,7 @@ def load_dicom_zip(
 
 
 # ============================================================
-# 3. DICOM + MASK
+# 3. DICOM + MASK + 3D
 # ============================================================
 
 st.header(
@@ -1119,14 +1131,14 @@ st.header(
 )
 
 st.caption(
-    "Upload DICOM ZIP. The same CNN model predicts the DICOM study, "
-    "and matching mask.npz files are used for the 3D affected region."
+    "Upload the DICOM study as a ZIP. Matching mask.npz files "
+    "will be used for the affected region."
 )
 
 uploaded_dicom = st.file_uploader(
     "Upload DICOM + Mask ZIP",
     type=["zip"],
-    key="dicom_zip"
+    key="uploaded_dicom"
 )
 
 
@@ -1134,7 +1146,8 @@ if uploaded_dicom:
 
     if st.button(
         "Predict DICOM + Load 3D",
-        type="primary"
+        type="primary",
+        key="dicom_predict_button"
     ):
 
         temp_dir = None
@@ -1142,20 +1155,20 @@ if uploaded_dicom:
         try:
 
             with st.spinner(
-                "Loading DICOM, predicting stroke type, and preparing 3D..."
+                "Loading DICOM, predicting stroke type, and creating 3D..."
             ):
 
                 (
-                    images,
-                    masks,
-                    dcms,
-                    mask_count,
+                    dicom_images,
+                    dicom_objects,
+                    dicom_masks,
+                    matching_mask_count,
                     temp_dir
                 ) = load_dicom_zip(
                     uploaded_dicom
                 )
 
-            if not images:
+            if not dicom_images:
 
                 st.error(
                     "No readable DICOM slices found in the ZIP."
@@ -1164,42 +1177,42 @@ if uploaded_dicom:
             else:
 
                 (
-                    d_class,
-                    d_confidence,
-                    d_probabilities,
-                    used_slices
-                ) = predict_dicom(
-                    images,
-                    dcms
+                    dicom_class,
+                    dicom_confidence,
+                    dicom_probabilities,
+                    used_slice_count
+                ) = predict_dicom_study(
+                    dicom_images,
+                    dicom_objects
                 )
 
                 st.session_state.dicom_prediction = {
 
                     "class":
-                        d_class,
+                        dicom_class,
 
                     "confidence":
-                        d_confidence,
+                        dicom_confidence,
 
                     "probabilities":
-                        d_probabilities,
+                        dicom_probabilities,
 
                     "used_slices":
-                        used_slices
+                        used_slice_count
                 }
 
                 st.session_state.dicom_result = {
 
                     "slices":
-                        len(images),
+                        len(dicom_images),
 
                     "matching_masks":
-                        mask_count,
+                        matching_mask_count,
 
                     "affected_region":
                         (
                             "Available"
-                            if mask_count > 0
+                            if matching_mask_count > 0
                             else "Not available"
                         )
                 }
@@ -1212,31 +1225,33 @@ if uploaded_dicom:
                     "DICOM Study Prediction"
                 )
 
-                c1, c2 = st.columns(2)
+                col1, col2 = st.columns(2)
 
-                with c1:
+                with col1:
 
                     st.success(
                         "Stroke Type: "
                         + str(
-                            d_class
+                            dicom_class
                         )
                     )
 
-                with c2:
+                with col2:
 
                     st.metric(
                         "Confidence",
-                        f"{d_confidence:.2f}%"
+                        f"{dicom_confidence:.2f}%"
                     )
 
-                st.caption(
-                    "DICOM prediction is calculated from sampled DICOM slices."
+                st.write(
+                    "DICOM slices used for prediction: "
+                    + str(
+                        used_slice_count
+                    )
                 )
 
                 dicom_probability_df = pd.DataFrame(
                     {
-
                         "Class": [
                             "Bleeding",
                             "Ischemic",
@@ -1246,19 +1261,19 @@ if uploaded_dicom:
                         "Probability (%)": [
 
                             float(
-                                d_probabilities[
+                                dicom_probabilities[
                                     0
                                 ] * 100
                             ),
 
                             float(
-                                d_probabilities[
+                                dicom_probabilities[
                                     1
                                 ] * 100
                             ),
 
                             float(
-                                d_probabilities[
+                                dicom_probabilities[
                                     2
                                 ] * 100
                             )
@@ -1278,28 +1293,25 @@ if uploaded_dicom:
                     )
                 )
 
+                # ----------------------------------------------------
+                # DICOM INFORMATION
+                # ----------------------------------------------------
+
                 st.write(
-                    "**DICOM Slices:** "
+                    "DICOM Slices: "
                     + str(
-                        len(images)
+                        len(dicom_images)
                     )
                 )
 
                 st.write(
-                    "**Slices Used for Prediction:** "
+                    "Matching Masks: "
                     + str(
-                        used_slices
-                    )
-                )
-
-                st.write(
-                    "**Matching Masks:** "
-                    + str(
-                        mask_count
+                        matching_mask_count
                     )
                     + "/"
                     + str(
-                        len(images)
+                        len(dicom_images)
                     )
                 )
 
@@ -1308,10 +1320,10 @@ if uploaded_dicom:
                 # ----------------------------------------------------
 
                 volume = np.stack(
-                    images
+                    dicom_images
                 )
 
-                step = max(
+                downsample_step = max(
                     1,
                     int(
                         max(
@@ -1321,59 +1333,55 @@ if uploaded_dicom:
                 )
 
                 volume_small = volume[
-                    ::step,
-                    ::step,
-                    ::step
+                    ::downsample_step,
+                    ::downsample_step,
+                    ::downsample_step
                 ]
 
-                _,
-                height,
-                width = (
+                depth, height, width = (
                     volume_small.shape
                 )
 
-                yy_grid, xx_grid = (
-                    np.ogrid[
-                        :height,
-                        :width
-                    ]
-                )
+                grid_y, grid_x = np.ogrid[
+                    :height,
+                    :width
+                ]
 
-                cy = (
+                center_y = (
                     height - 1
                 ) / 2.0
 
-                cx = (
+                center_x = (
                     width - 1
                 ) / 2.0
 
-                ry = (
+                radius_y = (
                     height * 0.46
                 )
 
-                rx = (
+                radius_x = (
                     width * 0.46
                 )
 
                 head_region = (
 
                     (
-                        (yy_grid - cy)
-                        / ry
+                        (grid_y - center_y)
+                        / radius_y
                     ) ** 2
 
                     +
 
                     (
-                        (xx_grid - cx)
-                        / rx
+                        (grid_x - center_x)
+                        / radius_x
                     ) ** 2
 
                     <= 1.0
                 )
 
-                # Brain soft-tissue range
-                brain_mask = (
+                # Soft tissue range
+                brain_volume_mask = (
 
                     (volume_small > -20)
 
@@ -1395,75 +1403,83 @@ if uploaded_dicom:
 
                     from scipy import ndimage
 
-                    labels_3d, count = (
+                    labeled_volume, component_count = (
                         ndimage.label(
-                            brain_mask
+                            brain_volume_mask
                         )
                     )
 
-                    if count > 0:
+                    if component_count > 0:
 
-                        sizes = np.bincount(
-                            labels_3d.ravel()
-                        )
-
-                        sizes[0] = 0
-
-                        largest = int(
-                            np.argmax(
-                                sizes
+                        component_sizes = (
+                            np.bincount(
+                                labeled_volume.ravel()
                             )
                         )
 
-                        brain_mask = (
-                            labels_3d
-                            == largest
+                        component_sizes[0] = 0
+
+                        largest_component = int(
+                            np.argmax(
+                                component_sizes
+                            )
+                        )
+
+                        brain_volume_mask = (
+                            labeled_volume
+                            == largest_component
                         )
 
                 except Exception:
 
                     pass
 
-                z, y, x = np.where(
-                    brain_mask
+                z_coords, y_coords, x_coords = np.where(
+                    brain_volume_mask
                 )
 
-                # Limit points
-                if len(x) > 18000:
+                # Limit point count
+                if len(
+                    x_coords
+                ) > 18000:
 
-                    rng = np.random.default_rng(
-                        42
+                    random_generator = (
+                        np.random.default_rng(
+                            42
+                        )
                     )
 
-                    ids = rng.choice(
-                        len(x),
-                        18000,
-                        replace=False
+                    point_ids = (
+                        random_generator.choice(
+                            len(x_coords),
+                            18000,
+                            replace=False
+                        )
                     )
 
-                    x = x[
-                        ids
+                    x_coords = x_coords[
+                        point_ids
                     ]
 
-                    y = y[
-                        ids
+                    y_coords = y_coords[
+                        point_ids
                     ]
 
-                    z = z[
-                        ids
+                    z_coords = z_coords[
+                        point_ids
                     ]
 
-                fig = go.Figure()
+                figure = go.Figure()
 
                 # Gray brain
-                fig.add_trace(
+                figure.add_trace(
                     go.Scatter3d(
 
-                        x=x,
+                        x=x_coords,
 
-                        y=y,
+                        y=y_coords,
 
-                        z=z,
+                        z=z_coords,
 
                         mode="markers",
 
@@ -1478,38 +1494,40 @@ if uploaded_dicom:
                 )
 
                 # ----------------------------------------------------
-                # RED AFFECTED REGION
+                # MATCHING MASK
                 # ----------------------------------------------------
 
                 affected_points = []
 
                 for slice_index, mask in enumerate(
-                    masks
+                    dicom_masks
                 ):
 
                     if mask is None:
 
                         continue
 
-                    mask_small = mask[
-                        ::step,
-                        ::step
+                    small_mask = mask[
+                        ::downsample_step,
+                        ::downsample_step
                     ]
 
-                    yy, xx = np.where(
-                        mask_small > 0
+                    mask_y, mask_x = np.where(
+                        small_mask > 0
                     )
 
-                    if len(xx):
+                    if len(
+                        mask_x
+                    ) > 0:
 
                         points = np.column_stack(
                             [
-                                xx,
-                                yy,
+                                mask_x,
+                                mask_y,
                                 np.full(
-                                    len(xx),
+                                    len(mask_x),
                                     slice_index
-                                    / step
+                                    / downsample_step
                                 )
                             ]
                         )
@@ -1528,25 +1546,29 @@ if uploaded_dicom:
                         affected_points
                     ) > 12000:
 
-                        rng = np.random.default_rng(
-                            42
+                        random_generator = (
+                            np.random.default_rng(
+                                42
+                            )
                         )
 
-                        ids = rng.choice(
-                            len(
-                                affected_points
-                            ),
-                            12000,
-                            replace=False
+                        affected_ids = (
+                            random_generator.choice(
+                                len(
+                                    affected_points
+                                ),
+                                12000,
+                                replace=False
+                            )
                         )
 
                         affected_points = (
                             affected_points[
-                                ids
+                                affected_ids
                             ]
                         )
 
-                    fig.add_trace(
+                    figure.add_trace(
                         go.Scatter3d(
 
                             x=affected_points[
@@ -1583,7 +1605,7 @@ if uploaded_dicom:
                         "Affected region: Not available"
                     )
 
-                fig.update_layout(
+                figure.update_layout(
 
                     title=(
                         "3D Brain CT Visualization"
@@ -1621,7 +1643,7 @@ if uploaded_dicom:
                 )
 
                 st.plotly_chart(
-                    fig,
+                    figure,
                     use_container_width=True
                 )
 
@@ -1631,11 +1653,11 @@ if uploaded_dicom:
                 "The uploaded file is not a valid ZIP file."
             )
 
-        except Exception as e:
+        except Exception as error:
 
             st.error(
                 "DICOM/3D Error: "
-                + str(e)
+                + str(error)
             )
 
         finally:
@@ -1717,10 +1739,6 @@ report_rows = [
 ]
 
 
-# ============================================================
-# CT REPORT
-# ============================================================
-
 if ct_prediction:
 
     report_rows.extend(
@@ -1736,6 +1754,21 @@ if ct_prediction:
             [
                 "CT Confidence",
                 f"{ct_prediction['confidence']:.2f}%"
+            ],
+
+            [
+                "CT Bleeding Probability",
+                f"{float(ct_prediction['probabilities'][0] * 100):.2f}%"
+            ],
+
+            [
+                "CT Ischemic Probability",
+                f"{float(ct_prediction['probabilities'][1] * 100):.2f}%"
+            ],
+
+            [
+                "CT Normal Probability",
+                f"{float(ct_prediction['probabilities'][2] * 100):.2f}%"
             ]
         ]
     )
@@ -1749,10 +1782,6 @@ else:
         ]
     )
 
-
-# ============================================================
-# DICOM REPORT
-# ============================================================
 
 if dicom_prediction:
 
@@ -1769,6 +1798,21 @@ if dicom_prediction:
             [
                 "DICOM Confidence",
                 f"{dicom_prediction['confidence']:.2f}%"
+            ],
+
+            [
+                "DICOM Bleeding Probability",
+                f"{float(dicom_prediction['probabilities'][0] * 100):.2f}%"
+            ],
+
+            [
+                "DICOM Ischemic Probability",
+                f"{float(dicom_prediction['probabilities'][1] * 100):.2f}%"
+            ],
+
+            [
+                "DICOM Normal Probability",
+                f"{float(dicom_prediction['probabilities'][2] * 100):.2f}%"
             ]
         ]
     )
@@ -1844,13 +1888,15 @@ st.dataframe(
 
 if st.button(
     "Save Final Report",
-    type="primary"
+    type="primary",
+    key="save_final_report_button"
 ):
 
     final_record = dict(
         patient
     )
 
+    # CT result
     if ct_prediction:
 
         final_record[
@@ -1891,6 +1937,7 @@ if st.button(
                 )
         }
 
+    # DICOM result
     if dicom_prediction:
 
         final_record[
@@ -1931,6 +1978,7 @@ if st.button(
                 )
         }
 
+    # DICOM 3D
     if dicom_result:
 
         final_record[
@@ -1967,7 +2015,7 @@ pdf = canvas.Canvas(
 
 page_width, page_height = A4
 
-y = (
+current_y = (
     page_height
     - 50
 )
@@ -1979,11 +2027,11 @@ pdf.setFont(
 
 pdf.drawString(
     45,
-    y,
+    current_y,
     "AI-Based Brain Stroke Detection Report"
 )
 
-y -= 32
+current_y -= 32
 
 pdf.setFont(
     "Helvetica",
@@ -2125,23 +2173,13 @@ if dicom_result:
     )
 
 
-pdf_lines.extend(
-    [
-
-        "AI-assisted academic project.",
-
-        "This system is not a substitute for clinical diagnosis."
-    ]
-)
-
-
 for line in pdf_lines:
 
-    if y < 60:
+    if current_y < 60:
 
         pdf.showPage()
 
-        y = (
+        current_y = (
             page_height
             - 50
         )
@@ -2153,12 +2191,19 @@ for line in pdf_lines:
 
     pdf.drawString(
         45,
-        y,
+        current_y,
         str(line)[:110]
     )
 
-    y -= 17
+    current_y -= 17
 
+
+pdf.drawString(
+    45,
+    current_y,
+    "AI-assisted academic project. "
+    "This system is not a substitute for clinical diagnosis."
+)
 
 pdf.save()
 
@@ -2178,7 +2223,8 @@ st.download_button(
         )
         + ".pdf"
     ),
-    mime="application/pdf"
+    mime="application/pdf",
+    key="download_pdf"
 )
 
 
