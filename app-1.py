@@ -22,13 +22,57 @@ from reportlab.pdfgen import canvas
 # PATHS
 # ============================================================
 
-PROJECT_DIR = "/content/drive/MyDrive/BrainStroke_Project"
-DATASET_DIR = "/content/drive/MyDrive/dataset"
-MODEL_PATH = os.path.join(PROJECT_DIR, "brain_stroke_model.keras")
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# GitHub / Streamlit Cloud
+PROJECT_DIR = APP_DIR
+
+# Colab fallback
+DRIVE_PROJECT_DIR = "/content/drive/MyDrive/BrainStroke_Project"
+
+MODEL_PATH = os.path.join(
+    PROJECT_DIR,
+    "brain_stroke_model.keras"
+)
+
+if not os.path.exists(MODEL_PATH):
+    drive_model = os.path.join(
+        DRIVE_PROJECT_DIR,
+        "brain_stroke_model.keras"
+    )
+    if os.path.exists(drive_model):
+        MODEL_PATH = drive_model
+
+DATASET_DIR = os.path.join(
+    PROJECT_DIR,
+    "dataset"
+)
+
+if not os.path.exists(DATASET_DIR):
+    drive_dataset = os.path.join(
+        DRIVE_PROJECT_DIR,
+        "dataset"
+    )
+    if os.path.exists(drive_dataset):
+        DATASET_DIR = drive_dataset
+
 PATIENT_RECORDS_DIR = os.path.join(
     PROJECT_DIR,
     "patient_records"
 )
+
+if not os.path.exists(PATIENT_RECORDS_DIR):
+    drive_records = os.path.join(
+        DRIVE_PROJECT_DIR,
+        "patient_records"
+    )
+    if os.path.exists(drive_records):
+        PATIENT_RECORDS_DIR = drive_records
+
+
+# ============================================================
+# CLASS MAPPING
+# ============================================================
 
 CLASS_NAMES = {
     0: "Bleeding",
@@ -47,8 +91,31 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("🧠 AI-Based Brain Stroke Detection")
-st.caption("CT Prediction + DICOM 3D Visualization")
+st.title(
+    "🧠 AI-Based Brain Stroke Detection"
+)
+
+st.caption(
+    "CT Prediction + DICOM/Mask 3D Visualization"
+)
+
+
+# ============================================================
+# SESSION STATE
+# ============================================================
+
+default_state = {
+    "patient_ready": False,
+    "patient_mode": None,
+    "patient_data": None,
+    "prediction": None,
+    "dicom_result": None,
+}
+
+for key, value in default_state.items():
+
+    if key not in st.session_state:
+        st.session_state[key] = value
 
 
 # ============================================================
@@ -57,13 +124,26 @@ st.caption("CT Prediction + DICOM 3D Visualization")
 
 @st.cache_resource
 def load_model():
-    return tf.keras.models.load_model(MODEL_PATH)
+
+    if not os.path.exists(MODEL_PATH):
+
+        raise FileNotFoundError(
+            "Model file not found: "
+            + MODEL_PATH
+        )
+
+    return tf.keras.models.load_model(
+        MODEL_PATH
+    )
 
 
 def predict_image(image):
 
     image = image.convert("RGB")
-    image = image.resize((224, 224))
+
+    image = image.resize(
+        (224, 224)
+    )
 
     arr = np.array(
         image,
@@ -100,10 +180,13 @@ def predict_image(image):
 
 
 # ============================================================
-# PATIENT RECORDS
+# PATIENT RECORD FUNCTIONS
 # ============================================================
 
-def save_patient(patient_id, data):
+def save_patient(
+    patient_id,
+    data
+):
 
     os.makedirs(
         PATIENT_RECORDS_DIR,
@@ -117,7 +200,8 @@ def save_patient(patient_id, data):
 
     with open(
         path,
-        "w"
+        "w",
+        encoding="utf-8"
     ) as f:
 
         json.dump(
@@ -127,7 +211,9 @@ def save_patient(patient_id, data):
         )
 
 
-def load_patient(patient_id):
+def load_patient(
+    patient_id
+):
 
     path = os.path.join(
         PATIENT_RECORDS_DIR,
@@ -138,7 +224,8 @@ def load_patient(patient_id):
 
         with open(
             path,
-            "r"
+            "r",
+            encoding="utf-8"
         ) as f:
 
             return json.load(f)
@@ -147,70 +234,370 @@ def load_patient(patient_id):
 
 
 # ============================================================
-# PATIENT INFORMATION
+# 1. PATIENT INFORMATION
 # ============================================================
 
-st.header("1. Patient Information")
+st.header(
+    "1. Patient Information"
+)
 
-col1, col2 = st.columns(2)
-
-with col1:
-
-    patient_name = st.text_input(
-        "Patient Name"
-    )
-
-    patient_id = st.text_input(
-        "Patient ID"
-    )
-
-    gender = st.selectbox(
-        "Gender",
-        [
-            "Male",
-            "Female",
-            "Other"
-        ]
-    )
-
-with col2:
-
-    address = st.text_area(
-        "Address"
-    )
-
-    scan_date = st.date_input(
-        "Scan Date",
-        value=date.today()
-    )
+patient_mode = st.radio(
+    "Patient Type",
+    [
+        "New Patient",
+        "Existing Patient"
+    ],
+    horizontal=True
+)
 
 
 # ============================================================
-# EXISTING PATIENT CHECK
+# NEW PATIENT
 # ============================================================
 
-if patient_id:
+if patient_mode == "New Patient":
 
-    old_record = load_patient(
-        patient_id
-    )
+    col1, col2 = st.columns(2)
 
-    if old_record:
+    with col1:
 
-        st.info(
-            "Existing Patient ID found."
+        patient_name = st.text_input(
+            "Patient Name"
         )
 
-        st.json(
-            old_record
+        patient_id = st.text_input(
+            "Patient ID"
         )
 
+        gender = st.selectbox(
+            "Gender",
+            [
+                "Male",
+                "Female",
+                "Other"
+            ]
+        )
+
+    with col2:
+
+        address = st.text_area(
+            "Address"
+        )
+
+        scan_date = st.date_input(
+            "Scan Date",
+            value=date.today()
+        )
+
+    if st.button(
+        "Save New Patient",
+        type="primary",
+        key="new_patient_save"
+    ):
+
+        if not patient_name.strip():
+
+            st.warning(
+                "Please enter Patient Name."
+            )
+
+        elif not patient_id.strip():
+
+            st.warning(
+                "Please enter Patient ID."
+            )
+
+        else:
+
+            clean_id = (
+                patient_id.strip()
+            )
+
+            old_record = load_patient(
+                clean_id
+            )
+
+            if old_record:
+
+                st.warning(
+                    "This Patient ID already exists. "
+                    "Please select Existing Patient."
+                )
+
+            else:
+
+                patient_data = {
+
+                    "name":
+                        patient_name.strip(),
+
+                    "id":
+                        clean_id,
+
+                    "gender":
+                        gender,
+
+                    "address":
+                        address.strip(),
+
+                    "scan_date":
+                        str(scan_date)
+                }
+
+                save_patient(
+                    clean_id,
+                    patient_data
+                )
+
+                st.session_state.patient_ready = True
+
+                st.session_state.patient_mode = (
+                    "New Patient"
+                )
+
+                st.session_state.patient_data = (
+                    patient_data
+                )
+
+                st.session_state.prediction = None
+
+                st.session_state.dicom_result = None
+
+                st.success(
+                    "New patient information saved successfully."
+                )
+
 
 # ============================================================
-# CT PREDICTION
+# EXISTING PATIENT
 # ============================================================
 
-st.header("2. CT Scan Prediction")
+else:
+
+    old_patient_id = st.text_input(
+        "Enter Existing Patient ID",
+        key="existing_patient_id"
+    )
+
+    if st.button(
+        "Load Patient Information",
+        type="primary",
+        key="existing_patient_load"
+    ):
+
+        if not old_patient_id.strip():
+
+            st.warning(
+                "Please enter Patient ID."
+            )
+
+        else:
+
+            old_record = load_patient(
+                old_patient_id.strip()
+            )
+
+            if old_record:
+
+                st.session_state.patient_ready = True
+
+                st.session_state.patient_mode = (
+                    "Existing Patient"
+                )
+
+                st.session_state.patient_data = (
+                    old_record
+                )
+
+                st.session_state.prediction = None
+
+                st.session_state.dicom_result = None
+
+                st.success(
+                    "Existing patient information loaded."
+                )
+
+            else:
+
+                st.session_state.patient_ready = False
+
+                st.session_state.patient_data = None
+
+                st.error(
+                    "Patient ID not found."
+                )
+
+
+# ============================================================
+# SHOW PATIENT INFORMATION
+# ============================================================
+
+if (
+    st.session_state.patient_ready
+    and st.session_state.patient_data
+):
+
+    patient = (
+        st.session_state.patient_data
+    )
+
+    st.subheader(
+        "Patient Information"
+    )
+
+    c1, c2 = st.columns(2)
+
+    with c1:
+
+        st.write(
+            "**Patient Name:** "
+            + str(
+                patient.get(
+                    "name",
+                    "-"
+                )
+            )
+        )
+
+        st.write(
+            "**Patient ID:** "
+            + str(
+                patient.get(
+                    "id",
+                    "-"
+                )
+            )
+        )
+
+        st.write(
+            "**Gender:** "
+            + str(
+                patient.get(
+                    "gender",
+                    "-"
+                )
+            )
+        )
+
+    with c2:
+
+        st.write(
+            "**Address:** "
+            + str(
+                patient.get(
+                    "address",
+                    "-"
+                )
+            )
+        )
+
+        st.write(
+            "**Scan Date:** "
+            + str(
+                patient.get(
+                    "scan_date",
+                    "-"
+                )
+            )
+        )
+
+    # --------------------------------------------------------
+    # OLD REPORT
+    # --------------------------------------------------------
+
+    if (
+        st.session_state.patient_mode
+        == "Existing Patient"
+    ):
+
+        old_class = patient.get(
+            "predicted_class"
+        )
+
+        old_confidence = patient.get(
+            "confidence"
+        )
+
+        if old_class:
+
+            st.info(
+                "Previous Report: "
+                + str(old_class)
+                + " - "
+                + f"{float(old_confidence):.2f}%"
+            )
+
+        old_probabilities = patient.get(
+            "probabilities"
+        )
+
+        if old_probabilities:
+
+            old_df = pd.DataFrame(
+                {
+                    "Class": [
+                        "Bleeding",
+                        "Ischemic",
+                        "Normal"
+                    ],
+                    "Probability (%)": [
+                        float(
+                            old_probabilities.get(
+                                "Bleeding",
+                                0
+                            )
+                        ),
+                        float(
+                            old_probabilities.get(
+                                "Ischemic",
+                                0
+                            )
+                        ),
+                        float(
+                            old_probabilities.get(
+                                "Normal",
+                                0
+                            )
+                        )
+                    ]
+                }
+            )
+
+            st.write(
+                "Previous Report Probabilities"
+            )
+
+            st.dataframe(
+                old_df,
+                hide_index=True,
+                use_container_width=True
+            )
+
+
+# ============================================================
+# DON'T CONTINUE BEFORE PATIENT
+# ============================================================
+
+if not st.session_state.patient_ready:
+
+    st.info(
+        "Please save a New Patient or load an Existing Patient ID first."
+    )
+
+    st.stop()
+
+
+# ============================================================
+# 2. CT SCAN
+# ============================================================
+
+st.header(
+    "2. CT Scan Prediction"
+)
+
+st.caption(
+    "Upload CT image for 2D stroke prediction."
+)
 
 uploaded_image = st.file_uploader(
     "Upload CT Image",
@@ -219,7 +606,7 @@ uploaded_image = st.file_uploader(
         "jpg",
         "jpeg"
     ],
-    key="ct_image_upload"
+    key="ct_upload"
 )
 
 
@@ -238,57 +625,76 @@ if uploaded_image:
     if st.button(
         "Predict Stroke",
         type="primary",
-        key="predict_button"
+        key="predict_stroke"
     ):
 
         try:
 
-            result, confidence, probabilities = (
-                predict_image(
-                    image
-                )
+            (
+                result,
+                confidence,
+                probabilities
+            ) = predict_image(
+                image
             )
 
-            st.session_state[
-                "prediction"
-            ] = {
+            st.session_state.prediction = {
 
-                "class": result,
+                "class":
+                    result,
 
-                "confidence": confidence,
+                "confidence":
+                    confidence,
 
-                "probabilities": probabilities
+                "probabilities":
+                    probabilities
             }
+
+            st.session_state.dicom_result = None
+
+            st.success(
+                f"Prediction: {result}"
+            )
 
         except Exception as e:
 
             st.error(
-                f"Prediction error: {e}"
+                "Prediction error: "
+                + str(e)
             )
 
 
 # ============================================================
-# RESULT
+# SHOW CURRENT PREDICTION
 # ============================================================
 
-if "prediction" in st.session_state:
+if st.session_state.prediction:
 
-    prediction = st.session_state[
-        "prediction"
-    ]
-
-    st.header(
-        "Prediction Result"
+    prediction = (
+        st.session_state.prediction
     )
 
-    st.success(
-        f"Prediction: {prediction['class']}"
+    st.subheader(
+        "CT Prediction Result"
     )
 
-    st.metric(
-        "Confidence",
-        f"{prediction['confidence']:.2f}%"
-    )
+    c1, c2 = st.columns(2)
+
+    with c1:
+
+        st.success(
+            "Prediction: "
+            + str(
+                prediction["class"]
+            )
+        )
+
+    with c2:
+
+        st.metric(
+            "Confidence",
+            f"{prediction['confidence']:.2f}%"
+        )
 
     probability_df = pd.DataFrame(
         {
@@ -297,7 +703,6 @@ if "prediction" in st.session_state:
                 "Ischemic",
                 "Normal"
             ],
-
             "Probability (%)": [
 
                 float(
@@ -332,6 +737,47 @@ if "prediction" in st.session_state:
 # DICOM FUNCTIONS
 # ============================================================
 
+def read_dicom_file(
+    dcm_path
+):
+
+    dicom = pydicom.dcmread(
+        dcm_path
+    )
+
+    image = (
+        dicom.pixel_array.astype(
+            np.float32
+        )
+    )
+
+    slope = float(
+        getattr(
+            dicom,
+            "RescaleSlope",
+            1
+        )
+    )
+
+    intercept = float(
+        getattr(
+            dicom,
+            "RescaleIntercept",
+            0
+        )
+    )
+
+    image = (
+        image * slope
+        + intercept
+    )
+
+    return (
+        dicom,
+        image
+    )
+
+
 def get_studies():
 
     studies = []
@@ -356,12 +802,14 @@ def get_studies():
             split_path
         ):
 
-            path = os.path.join(
+            study_path = os.path.join(
                 split_path,
                 study
             )
 
-            if os.path.isdir(path):
+            if os.path.isdir(
+                study_path
+            ):
 
                 studies.append(
                     (
@@ -373,42 +821,6 @@ def get_studies():
     return sorted(
         studies
     )
-
-
-def read_dicom_file(
-    dcm_path
-):
-
-    dicom = pydicom.dcmread(
-        dcm_path
-    )
-
-    image = dicom.pixel_array.astype(
-        np.float32
-    )
-
-    slope = float(
-        getattr(
-            dicom,
-            "RescaleSlope",
-            1
-        )
-    )
-
-    intercept = float(
-        getattr(
-            dicom,
-            "RescaleIntercept",
-            0
-        )
-    )
-
-    image = (
-        image * slope
-        + intercept
-    )
-
-    return dicom, image
 
 
 def load_dicom_study(
@@ -500,6 +912,7 @@ def load_dicom_study(
                 )
 
         except Exception:
+
             continue
 
     return (
@@ -509,7 +922,7 @@ def load_dicom_study(
 
 
 # ============================================================
-# UPLOAD DICOM + MASK ZIP
+# DICOM ZIP UPLOAD
 # ============================================================
 
 def load_uploaded_dicom_zip(
@@ -553,8 +966,7 @@ def load_uploaded_dicom_zip(
             )
 
         dicom_paths = []
-
-        mask_by_folder = {}
+        masks_by_folder = {}
 
         for root, _, files in os.walk(
             temp_dir
@@ -581,7 +993,7 @@ def load_uploaded_dicom_zip(
 
                 elif lower_name == "mask.npz":
 
-                    relative_dir = os.path.relpath(
+                    folder = os.path.relpath(
                         root,
                         temp_dir
                     ).replace(
@@ -589,8 +1001,8 @@ def load_uploaded_dicom_zip(
                         "/"
                     )
 
-                    mask_by_folder[
-                        relative_dir
+                    masks_by_folder[
+                        folder
                     ] = full_path
 
         if not dicom_paths:
@@ -605,7 +1017,9 @@ def load_uploaded_dicom_zip(
         def sort_key(path):
 
             parent = os.path.basename(
-                os.path.dirname(path)
+                os.path.dirname(
+                    path
+                )
             )
 
             if parent.isdigit():
@@ -645,21 +1059,19 @@ def load_uploaded_dicom_zip(
                     image
                 )
 
-                relative_dir = (
-                    os.path.relpath(
-                        os.path.dirname(
-                            dcm_path
-                        ),
-                        temp_dir
-                    ).replace(
-                        "\\",
-                        "/"
-                    )
+                folder = os.path.relpath(
+                    os.path.dirname(
+                        dcm_path
+                    ),
+                    temp_dir
+                ).replace(
+                    "\\",
+                    "/"
                 )
 
                 mask_path = (
-                    mask_by_folder.get(
-                        relative_dir
+                    masks_by_folder.get(
+                        folder
                     )
                 )
 
@@ -691,6 +1103,7 @@ def load_uploaded_dicom_zip(
                     )
 
             except Exception:
+
                 continue
 
         return (
@@ -711,77 +1124,83 @@ def load_uploaded_dicom_zip(
 
 
 # ============================================================
-# 3D VISUALIZATION
+# 3. DICOM + MASK 3D VISUALIZATION
 # ============================================================
 
 st.header(
-    "3. DICOM 3D Visualization"
+    "3. DICOM + Mask 3D Visualization"
 )
 
 st.caption(
-    "Upload a ZIP containing the DICOM series and matching mask.npz files."
+    "DICOM is used for 3D visualization. "
+    "Upload the DICOM series with matching mask.npz files."
 )
 
 uploaded_dicom_zip = st.file_uploader(
     "Upload DICOM + Mask ZIP",
     type=["zip"],
-    key="dicom_mask_zip"
+    key="dicom_zip_upload"
 )
 
 
-# Existing local studies
-studies = get_studies()
+# Existing studies
+existing_studies = get_studies()
 
-selected = None
-study_path = None
+existing_study_path = None
+existing_study_label = None
 
-if studies:
+if existing_studies:
 
     st.subheader(
         "Or Select Existing DICOM Study"
     )
 
-    labels = [
+    study_labels = [
 
         f"{split.upper()} - {study}"
 
-        for split, study in studies
+        for split, study in existing_studies
     ]
 
-    selected = st.selectbox(
+    existing_study_label = st.selectbox(
         "Select DICOM Study",
-        labels,
-        key="existing_study_select"
+        study_labels,
+        key="study_select"
     )
 
-    index = labels.index(
-        selected
+    selected_index = study_labels.index(
+        existing_study_label
     )
 
-    split, study = studies[
-        index
-    ]
+    selected_split, selected_study = (
+        existing_studies[
+            selected_index
+        ]
+    )
 
-    study_path = os.path.join(
+    existing_study_path = os.path.join(
         DATASET_DIR,
-        split,
-        study
+        selected_split,
+        selected_study
     )
 
 
 # ============================================================
-# LOAD 3D BUTTON
+# LOAD 3D
 # ============================================================
 
-if uploaded_dicom_zip is not None or study_path:
+if (
+    uploaded_dicom_zip is not None
+    or existing_study_path is not None
+):
 
     if st.button(
         "Load 3D Visualization",
         type="primary",
-        key="load_3d_button"
+        key="load_3d"
     ):
 
-        temp_dir_to_remove = None
+        temp_dir = None
 
         try:
 
@@ -795,12 +1214,12 @@ if uploaded_dicom_zip is not None or study_path:
                         images,
                         masks,
                         mask_count,
-                        temp_dir_to_remove
+                        temp_dir
                     ) = load_uploaded_dicom_zip(
                         uploaded_dicom_zip
                     )
 
-                    source_text = (
+                    source = (
                         "Uploaded DICOM + Mask ZIP"
                     )
 
@@ -810,16 +1229,17 @@ if uploaded_dicom_zip is not None or study_path:
                         images,
                         masks
                     ) = load_dicom_study(
-                        study_path
+                        existing_study_path
                     )
 
                     mask_count = sum(
-                        m is not None
-                        for m in masks
+                        mask is not None
+                        for mask in masks
                     )
 
-                    source_text = (
-                        f"Study: {selected}"
+                    source = (
+                        f"Existing study: "
+                        f"{existing_study_label}"
                     )
 
             if not images:
@@ -831,7 +1251,7 @@ if uploaded_dicom_zip is not None or study_path:
             else:
 
                 st.success(
-                    f"{source_text} — "
+                    f"{source} - "
                     f"Loaded {len(images)} DICOM slices."
                 )
 
@@ -845,7 +1265,7 @@ if uploaded_dicom_zip is not None or study_path:
                 )
 
                 # ====================================================
-                # CLEAN 3D BRAIN VISUALIZATION
+                # CLEAN BRAIN VISUALIZATION
                 # ====================================================
 
                 step = max(
@@ -863,7 +1283,7 @@ if uploaded_dicom_zip is not None or study_path:
                     ::step
                 ]
 
-                depth, height, width = (
+                _, height, width = (
                     volume_small.shape
                 )
 
@@ -872,40 +1292,40 @@ if uploaded_dicom_zip is not None or study_path:
                     :width
                 ]
 
-                cy = (
+                center_y = (
                     height - 1
                 ) / 2.0
 
-                cx = (
+                center_x = (
                     width - 1
                 ) / 2.0
 
-                ry = (
+                radius_y = (
                     height * 0.46
                 )
 
-                rx = (
+                radius_x = (
                     width * 0.46
                 )
 
-                head_ellipse = (
+                head_region = (
 
                     (
-                        (yy_grid - cy)
-                        / ry
+                        (yy_grid - center_y)
+                        / radius_y
                     ) ** 2
 
                     +
 
                     (
-                        (xx_grid - cx)
-                        / rx
+                        (xx_grid - center_x)
+                        / radius_x
                     ) ** 2
 
                     <= 1.0
                 )
 
-                # Keep central brain soft tissue
+                # Brain soft tissue
                 brain_mask = (
 
                     (volume_small > -20)
@@ -916,7 +1336,7 @@ if uploaded_dicom_zip is not None or study_path:
 
                     &
 
-                    head_ellipse[
+                    head_region[
                         None,
                         :,
                         :
@@ -954,6 +1374,7 @@ if uploaded_dicom_zip is not None or study_path:
                         )
 
                 except Exception:
+
                     pass
 
                 z, y, x = np.where(
@@ -967,50 +1388,34 @@ if uploaded_dicom_zip is not None or study_path:
                         42
                     )
 
-                    selected_points = (
-                        rng.choice(
-                            len(x),
-                            18000,
-                            replace=False
-                        )
+                    ids = rng.choice(
+                        len(x),
+                        18000,
+                        replace=False
                     )
 
-                    x = x[
-                        selected_points
-                    ]
-
-                    y = y[
-                        selected_points
-                    ]
-
-                    z = z[
-                        selected_points
-                    ]
+                    x = x[ids]
+                    y = y[ids]
+                    z = z[ids]
 
                 fig = go.Figure()
 
                 fig.add_trace(
                     go.Scatter3d(
-
                         x=x,
-
                         y=y,
-
                         z=z,
-
                         mode="markers",
-
                         marker=dict(
                             size=1.8,
                             opacity=0.28
                         ),
-
                         name="Brain CT"
                     )
                 )
 
                 # ====================================================
-                # AFFECTED REGION
+                # MATCHING AFFECTED REGION
                 # ====================================================
 
                 affected_points = []
@@ -1049,10 +1454,16 @@ if uploaded_dicom_zip is not None or study_path:
                             points
                         )
 
-                if affected_points:
+                affected_available = (
+                    len(affected_points) > 0
+                )
 
-                    affected_points = np.vstack(
-                        affected_points
+                if affected_available:
+
+                    affected_points = (
+                        np.vstack(
+                            affected_points
+                        )
                     )
 
                     if len(
@@ -1072,33 +1483,25 @@ if uploaded_dicom_zip is not None or study_path:
                         )
 
                         affected_points = (
-                            affected_points[
-                                ids
-                            ]
+                            affected_points[ids]
                         )
 
                     fig.add_trace(
                         go.Scatter3d(
-
                             x=affected_points[
                                 :, 0
                             ],
-
                             y=affected_points[
                                 :, 1
                             ],
-
                             z=affected_points[
                                 :, 2
                             ],
-
                             mode="markers",
-
                             marker=dict(
                                 size=3.0,
                                 opacity=0.95
                             ),
-
                             name="Affected Region"
                         )
                     )
@@ -1138,24 +1541,15 @@ if uploaded_dicom_zip is not None or study_path:
                         )
                     ),
 
-                    legend=dict(
-
-                        orientation="h",
-
-                        yanchor="bottom",
-
-                        y=1.02,
-
-                        xanchor="left",
-
-                        x=0
-                    ),
-
                     margin=dict(
                         l=0,
                         r=0,
                         t=55,
                         b=0
+                    ),
+
+                    legend=dict(
+                        orientation="h"
                     )
                 )
 
@@ -1164,108 +1558,526 @@ if uploaded_dicom_zip is not None or study_path:
                     use_container_width=True
                 )
 
+                # Store DICOM result
+                st.session_state.dicom_result = {
+
+                    "source":
+                        source,
+
+                    "slices":
+                        len(images),
+
+                    "matching_masks":
+                        mask_count,
+
+                    "affected_region":
+                        (
+                            "Available"
+                            if affected_available
+                            else "Not available"
+                        )
+                }
+
         except zipfile.BadZipFile:
 
             st.error(
-                "The uploaded file is not a valid ZIP archive."
+                "The uploaded file is not a valid ZIP file."
             )
 
         except Exception as e:
 
             st.error(
-                f"3D loading error: {e}"
+                "3D loading error: "
+                + str(e)
             )
 
         finally:
 
-            if temp_dir_to_remove:
+            if temp_dir:
 
                 shutil.rmtree(
-                    temp_dir_to_remove,
+                    temp_dir,
                     ignore_errors=True
                 )
 
 
 # ============================================================
-# SAVE REPORT
+# 4. FINAL REPORT
 # ============================================================
 
 st.header(
-    "4. Save Report"
+    "4. Final Report"
 )
 
-if "prediction" in st.session_state:
+patient = (
+    st.session_state.patient_data
+)
 
-    prediction = st.session_state[
-        "prediction"
+prediction = (
+    st.session_state.prediction
+)
+
+dicom_result = (
+    st.session_state.dicom_result
+)
+
+
+# ============================================================
+# REPORT
+# ============================================================
+
+if patient and prediction:
+
+    st.subheader(
+        "Report Summary"
+    )
+
+    report_rows = [
+
+        [
+            "Patient Name",
+            patient.get(
+                "name",
+                "-"
+            )
+        ],
+
+        [
+            "Patient ID",
+            patient.get(
+                "id",
+                "-"
+            )
+        ],
+
+        [
+            "Gender",
+            patient.get(
+                "gender",
+                "-"
+            )
+        ],
+
+        [
+            "Address",
+            patient.get(
+                "address",
+                "-"
+            )
+        ],
+
+        [
+            "Scan Date",
+            patient.get(
+                "scan_date",
+                "-"
+            )
+        ],
+
+        [
+            "CT Prediction",
+            prediction[
+                "class"
+            ]
+        ],
+
+        [
+            "Confidence",
+            f"{prediction['confidence']:.2f}%"
+        ],
     ]
 
-    patient_data = {
+    if dicom_result:
 
-        "name": patient_name,
+        report_rows.extend(
+            [
 
-        "id": patient_id,
+                [
+                    "DICOM 3D",
+                    "Loaded"
+                ],
 
-        "gender": gender,
+                [
+                    "DICOM Slices",
+                    str(
+                        dicom_result[
+                            "slices"
+                        ]
+                    )
+                ],
 
-        "address": address,
+                [
+                    "Matching Masks",
+                    str(
+                        dicom_result[
+                            "matching_masks"
+                        ]
+                    )
+                ],
 
-        "scan_date": str(
-            scan_date
-        ),
+                [
+                    "Affected Region",
+                    dicom_result[
+                        "affected_region"
+                    ]
+                ]
+            ]
+        )
 
-        "predicted_class":
-            prediction["class"],
+    else:
 
-        "confidence":
-            prediction["confidence"],
+        report_rows.extend(
+            [
 
-        "probabilities": {
+                [
+                    "DICOM 3D",
+                    "Not loaded"
+                ],
 
-            "Bleeding":
-                float(
-                    prediction[
-                        "probabilities"
-                    ][0] * 100
-                ),
+                [
+                    "Affected Region",
+                    "Not available"
+                ]
+            ]
+        )
 
-            "Ischemic":
-                float(
-                    prediction[
-                        "probabilities"
-                    ][1] * 100
-                ),
+    report_df = pd.DataFrame(
+        report_rows,
+        columns=[
+            "Field",
+            "Value"
+        ]
+    )
 
-            "Normal":
-                float(
-                    prediction[
-                        "probabilities"
-                    ][2] * 100
-                )
-        }
-    }
+    st.dataframe(
+        report_df,
+        hide_index=True,
+        use_container_width=True
+    )
+
+
+    # ========================================================
+    # SAVE FINAL REPORT
+    # ========================================================
 
     if st.button(
-        "Save Patient Report",
-        key="save_report_button"
+        "Save Final Report",
+        type="primary",
+        key="save_final_report"
     ):
 
-        if not patient_id:
+        final_record = {
 
-            st.warning(
-                "Please enter Patient ID."
+            "name":
+                patient.get(
+                    "name",
+                    ""
+                ),
+
+            "id":
+                patient.get(
+                    "id",
+                    ""
+                ),
+
+            "gender":
+                patient.get(
+                    "gender",
+                    ""
+                ),
+
+            "address":
+                patient.get(
+                    "address",
+                    ""
+                ),
+
+            "scan_date":
+                patient.get(
+                    "scan_date",
+                    ""
+                ),
+
+            "predicted_class":
+                prediction[
+                    "class"
+                ],
+
+            "confidence":
+                prediction[
+                    "confidence"
+                ],
+
+            "probabilities": {
+
+                "Bleeding":
+                    float(
+                        prediction[
+                            "probabilities"
+                        ][0] * 100
+                    ),
+
+                "Ischemic":
+                    float(
+                        prediction[
+                            "probabilities"
+                        ][1] * 100
+                    ),
+
+                "Normal":
+                    float(
+                        prediction[
+                            "probabilities"
+                        ][2] * 100
+                    )
+            },
+
+            "dicom_3d":
+                (
+                    dicom_result
+                    if dicom_result
+                    else {
+                        "status":
+                            "Not loaded"
+                    }
+                )
+        }
+
+        patient_id_for_save = (
+            patient.get(
+                "id",
+                ""
             )
+        )
 
-        else:
+        if patient_id_for_save:
 
             save_patient(
-                patient_id,
-                patient_data
+                patient_id_for_save,
+                final_record
+            )
+
+            st.session_state.patient_data = (
+                final_record
             )
 
             st.success(
-                "Patient report saved successfully."
+                "Final patient report saved successfully."
             )
+
+
+    # ========================================================
+    # PDF REPORT
+    # ========================================================
+
+    pdf_buffer = io.BytesIO()
+
+    pdf = canvas.Canvas(
+        pdf_buffer,
+        pagesize=A4
+    )
+
+    page_width, page_height = A4
+
+    y = (
+        page_height
+        - 50
+    )
+
+    pdf.setFont(
+        "Helvetica-Bold",
+        16
+    )
+
+    pdf.drawString(
+        50,
+        y,
+        "AI-Based Brain Stroke Detection Report"
+    )
+
+    y -= 35
+
+    pdf.setFont(
+        "Helvetica",
+        10
+    )
+
+    pdf_lines = [
+
+        "Patient Name: "
+        + str(
+            patient.get(
+                "name",
+                "-"
+            )
+        ),
+
+        "Patient ID: "
+        + str(
+            patient.get(
+                "id",
+                "-"
+            )
+        ),
+
+        "Gender: "
+        + str(
+            patient.get(
+                "gender",
+                "-"
+            )
+        ),
+
+        "Address: "
+        + str(
+            patient.get(
+                "address",
+                "-"
+            )
+        ),
+
+        "Scan Date: "
+        + str(
+            patient.get(
+                "scan_date",
+                "-"
+            )
+        ),
+
+        "",
+
+        "CT Prediction: "
+        + str(
+            prediction[
+                "class"
+            ]
+        ),
+
+        "Confidence: "
+        + f"{prediction['confidence']:.2f}%",
+
+        "",
+
+        "Bleeding: "
+        + f"{float(prediction['probabilities'][0] * 100):.2f}%",
+
+        "Ischemic: "
+        + f"{float(prediction['probabilities'][1] * 100):.2f}%",
+
+        "Normal: "
+        + f"{float(prediction['probabilities'][2] * 100):.2f}%",
+
+        ""
+    ]
+
+
+    if dicom_result:
+
+        pdf_lines.extend(
+            [
+
+                "DICOM 3D Visualization: Loaded",
+
+                "DICOM Slices: "
+                + str(
+                    dicom_result[
+                        "slices"
+                    ]
+                ),
+
+                "Matching Masks: "
+                + str(
+                    dicom_result[
+                        "matching_masks"
+                    ]
+                ),
+
+                "Affected Region: "
+                + str(
+                    dicom_result[
+                        "affected_region"
+                    ]
+                )
+            ]
+        )
+
+    else:
+
+        pdf_lines.extend(
+            [
+
+                "DICOM 3D Visualization: Not loaded",
+
+                "Affected Region: Not available"
+            ]
+        )
+
+
+    pdf_lines.extend(
+        [
+
+            "",
+
+            "AI-assisted academic project.",
+
+            "This system is not a substitute for clinical diagnosis."
+        ]
+    )
+
+
+    for line in pdf_lines:
+
+        if y < 60:
+
+            pdf.showPage()
+
+            y = (
+                page_height
+                - 50
+            )
+
+            pdf.setFont(
+                "Helvetica",
+                10
+            )
+
+        pdf.drawString(
+            50,
+            y,
+            str(line)
+        )
+
+        y -= 17
+
+
+    pdf.save()
+
+    pdf_buffer.seek(0)
+
+
+    st.download_button(
+        "Download PDF Report",
+        data=pdf_buffer,
+        file_name=(
+            "brain_stroke_report_"
+            + str(
+                patient.get(
+                    "id",
+                    "patient"
+                )
+            )
+            + ".pdf"
+        ),
+        mime="application/pdf",
+        key="download_pdf"
+    )
+
+
+else:
+
+    st.info(
+        "Complete the CT prediction before generating the final report."
+    )
 
 
 # ============================================================
